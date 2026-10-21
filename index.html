@@ -161,7 +161,10 @@ $('photoform').addEventListener('submit',async e=>{
   const [name,area]=pub.split('|');
   status.textContent='Sending compressed photo…';
   sendPost({action:'photo',pub:name,area,mime:'image/jpeg',base64:data,filename:'huzz-photo.jpg',by:$('photoname').value.trim(),caption:$('photocaption').value.trim()});
-  status.textContent='Photo sent for review. Please check the Photos sheet to confirm it arrived (the website cannot confirm receipt automatically).';
+  status.textContent='Photo sent. Waiting for it to appear in the gallery…';
+  const submittedPub=pub;
+  // The hidden-form POST cannot report completion. Poll the public Photos sheet.
+  (async()=>{for(let attempt=0;attempt<10;attempt++){await new Promise(r=>setTimeout(r,3000));await refreshPhotos();const [n,a]=submittedPub.split('|');if(photos.some(x=>x.pub.toLowerCase()===n.toLowerCase()&&x.area.toLowerCase()===a.toLowerCase())){status.textContent='Gallery refreshed. Your photo may now be visible below.';renderPhotos();return}}status.textContent='Upload sent, but not confirmed. Refresh the page and check the Photos sheet.';})();
   $('photoform').reset();
  }catch(err){status.textContent=err.message||'Photo upload failed. Try another photo.'}
  finally{button.disabled=false}

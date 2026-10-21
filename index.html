@@ -116,7 +116,56 @@ function openPhotos(p){switchTab('photos');$('photopub').value=p.name+'|'+p.area
 function renderPhotos(){const val=$('photopub').value;const list=val?photos.filter(p=>(p.pub+'|'+p.area).toLowerCase()===val.toLowerCase()):[];$('photostatus').textContent=!val?'Select a pub to see photos.':list.length?list.length+' approved photo(s)':'No approved photos yet — be the first to submit one.';$('photogrid').innerHTML=list.map(p=>'<div class="photocard"><a href="'+escapeHtml(p.url)+'" target="_blank" rel="noopener noreferrer"><img loading="lazy" referrerpolicy="no-referrer" src="'+escapeHtml(p.url)+'" alt="Photo from '+escapeHtml(p.pub)+'"></a><div class="details">'+escapeHtml(p.caption||'Pub photo')+'<div>🕒 '+escapeHtml(p.date)+'</div><div>'+escapeHtml(p.by?'By '+p.by:'Anonymous')+'</div></div></div>').join('')}
 function sendPost(fields){const form=document.createElement('form');form.method='POST';form.action=SUGGEST_ENDPOINT;form.target='suggestSink';for(const [name,value] of Object.entries(fields)){const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.appendChild(input)}let frame=$('suggestSink');if(!frame){frame=document.createElement('iframe');frame.name='suggestSink';frame.id='suggestSink';frame.style.display='none';document.body.appendChild(frame)}document.body.appendChild(form);form.submit();form.remove()}
 $('tabfinder').onclick=()=>switchTab('finder');$('tabsuggest').onclick=()=>switchTab('suggestions');$('tabphotos').onclick=()=>switchTab('photos');$('backfinder').onclick=()=>switchTab('finder');$('photopub').onchange=renderPhotos;
-$('photoform').addEventListener('submit',async e=>{e.preventDefault();const pub=$('photopub').value, file=$('photofile').files[0],status=$('photouploadstatus');if(!pub){status.textContent='Choose a pub first.';return}if(!SUGGEST_ENDPOINT){status.textContent='Photo uploads need the Google Apps Script endpoint. Ask the site owner to connect it.';return}if(!file||file.size>2*1024*1024||!['image/jpeg','image/png','image/webp'].includes(file.type)){status.textContent='Choose a JPEG, PNG or WebP under 2 MB.';return}const button=$('photoupload');button.disabled=true;status.textContent='Preparing photo…';try{const data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=reject;reader.readAsDataURL(file)});const [name,area]=pub.split('|');sendPost({action:'photo',pub:name,area,mime:file.type,base64:data,filename:file.name,by:$('photoname').value.trim(),caption:$('photocaption').value.trim()});status.textContent='Upload sent for review. Check the Photos sheet to confirm it arrived. It will appear here after approval and refresh.';$('photoform').reset()}catch(err){status.textContent='Could not prepare photo. Try again.'}finally{button.disabled=false}});
+// Compress large camera photos locally; Apps Script still receives <2 MB JPEG.
+async function compressPubPhoto(file){
+ if(file.size>100*1024*1024)throw Error('Choose a photo under 100 MB.');
+ if(!['image/jpeg','image/png','image/webp'].includes(file.type))throw Error('Choose a JPG, PNG or WebP image.');
+ const image=await new Promise((resolve,reject)=>{
+  const url=URL.createObjectURL(file),img=new Image();
+  img.onload=()=>{URL.revokeObjectURL(url);resolve(img)};
+  img.onerror=()=>{URL.revokeObjectURL(url);reject(Error('Cannot open this image. Try a JPG.'))};
+  img.src=url;
+ });
+ const maxSide=1600,scale=Math.min(1,maxSide/Math.max(image.naturalWidth,image.naturalHeight));
+ const canvas=document.createElement('canvas');
+ canvas.width=Math.max(1,Math.round(image.naturalWidth*scale));
+ canvas.height=Math.max(1,Math.round(image.naturalHeight*scale));
+ const ctx=canvas.getContext('2d');
+ if(!ctx)throw Error('Image processing is unavailable on this phone.');
+ ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);
+ ctx.drawImage(image,0,0,canvas.width,canvas.height);
+ let blob;
+ for(const quality of [.82,.72,.60,.48]){
+  blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',quality));
+  if(!blob)throw Error('Could not compress this photo.');
+  if(blob.size<=1.5*1024*1024)break;
+ }
+ if(blob.size>1.9*1024*1024)throw Error('Image is still too large after compression. Try a smaller photo.');
+ return await new Promise((resolve,reject)=>{
+  const reader=new FileReader();
+  reader.onload=()=>resolve(String(reader.result).split(',')[1]);
+  reader.onerror=()=>reject(Error('Could not read the compressed photo.'));
+  reader.readAsDataURL(blob);
+ });
+}
+$('photoform').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const pub=$('photopub').value,file=$('photofile').files[0],status=$('photouploadstatus');
+ if(!pub){status.textContent='Choose a pub first.';return}
+ if(!file){status.textContent='Choose a photo first.';return}
+ if(!SUGGEST_ENDPOINT){status.textContent='Photo uploads are not connected yet.';return}
+ const button=$('photoupload');
+ button.disabled=true;status.textContent='Compressing photo on your phone…';
+ try{
+  const data=await compressPubPhoto(file);
+  const [name,area]=pub.split('|');
+  status.textContent='Sending compressed photo…';
+  sendPost({action:'photo',pub:name,area,mime:'image/jpeg',base64:data,filename:'huzz-photo.jpg',by:$('photoname').value.trim(),caption:$('photocaption').value.trim()});
+  status.textContent='Photo sent for review. Please check the Photos sheet to confirm it arrived (the website cannot confirm receipt automatically).';
+  $('photoform').reset();
+ }catch(err){status.textContent=err.message||'Photo upload failed. Try another photo.'}
+ finally{button.disabled=false}
+});
 
 ['area','day','sort','search','verified'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));$('refresh').addEventListener('click',async()=>{await loadSheet();fillPhotoPubs();await refreshPhotos()});setupMap();render();loadSheet().then(()=>{fillPhotoPubs();refreshPhotos();});
 </script></body></html>

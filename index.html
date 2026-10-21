@@ -84,4 +84,91 @@ async function loadSheet(){
 }
 function areaOptions(){const selected=$('area').value;const areas=[...new Set(records.map(p=>p.area))].sort((a,b)=>a.localeCompare(b));$('area').innerHTML='<option value="">All areas</option>'+areas.map(a=>`<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('');$('area').value=areas.includes(selected)?selected:''}
 function dayMatch(p,day){if(!day)return true;if(!p.days.length)return true;return p.days.some(d=>d.day===day&&(d.price!=null||!$('verified').checked))}
-function render(){areaOptions();const area=$('area').value,day=$('day').value,q=$('search').value.toLowerCase().trim();let data=records.filter(p=>(!area||p.area===area)&&(!$('verified').checked||(p.price!=null&&p.price<=5.5&&p.verified))&&dayMatch(p,day)&&(!q||[p.name,p.address,p.deal,p.area].join(' ').toLowerCase().includes(q)));data.sort($('sort').value==='price'?(a,b)=>(a.price??999)-(b.price??999)||a.name.localeCompare(b.name):(a,b)=>a.name.localeCompare(b.name));$('results').innerHTML=`<div class="count">${syncMode==='live'?'🟢 LIVE SHEET':'🟠 PREVIEW'} · ${data.length} pubs · ${area||'All areas'} · ${$('verified').checked?'Confirmed prices £5.50 or less':'Including unverified prices'}</div>`+(data.map((p,i)=>`<article class="pub" data-i="${i}" tabindex="0" role="button"><div class="top"><div><h3>${escapeHtml(p.name)}</h3><div class="addr">📍 ${escapeHtml(p.address||p.area)}</div></div><div class="price">${p.price==null?'—':'£'+p.price.toFixed(2)}</div></div><div class="deal">${escapeHtml(p.deal)}</div><div class="meta">🕒 ${escapeHtml(p.hours||'Times not confirmed')}</div><span class="tag ${p.verified?'':'unverified'}">${p.verified?'Price listed':'Price unverified'}</span><span class="tag">${escapeHtml(p.area)}</span><but
+function render(){areaOptions();const area=$('area').value,day=$('day').value,q=$('search').value.toLowerCase().trim();let data=records.filter(p=>(!area||p.area===area)&&(!$('verified').checked||(p.price!=null&&p.price<=5.5&&p.verified))&&dayMatch(p,day)&&(!q||[p.name,p.address,p.deal,p.area].join(' ').toLowerCase().includes(q)));data.sort($('sort').value==='price'?(a,b)=>(a.price??999)-(b.price??999)||a.name.localeCompare(b.name):(a,b)=>a.name.localeCompare(b.name));$('results').innerHTML=`<div class="count">${syncMode==='live'?'🟢 LIVE SHEET':'🟠 PREVIEW'} · ${data.length} pubs · ${area||'All areas'} · ${$('verified').checked?'Confirmed prices £5.50 or less':'Including unverified prices'}</div>`+(data.map((p,i)=>`<article class="pub" data-i="${i}" tabindex="0" role="button"><div class="top"><div><h3>${escapeHtml(p.name)}</h3><div class="addr">📍 ${escapeHtml(p.address||p.area)}</div></div><div class="price">${p.price==null?'—':'£'+p.price.toFixed(2)}</div></div><div class="deal">${escapeHtml(p.deal)}</div><div class="meta">🕒 ${escapeHtml(p.hours||'Times not confirmed')}</div><span class="tag ${p.verified?'':'unverified'}">${p.verified?'Price listed':'Price unverified'}</span><span class="tag">${escapeHtml(p.area)}</span><button class="photosbtn" type="button" data-photo="${i}">📸 Photos · ${photos.filter(x=>x.pub.toLowerCase()===p.name.toLowerCase()&&x.area.toLowerCase()===p.area.toLowerCase()).length}</button><div class="links"><a target="_blank" rel="noopener" href="https://www.openstreetmap.org/search?query=${encodeURIComponent(p.name+' '+p.address)}">Open in OSM ↗</a>${p.source?`<a target="_blank" rel="noopener" href="${escapeHtml(p.source)}">Source ↗</a>`:''}</div></article>`).join('')||'<div class="count">No matching pubs. Try turning off “Only confirmed”.</div>');document.querySelectorAll('.photosbtn').forEach(el=>el.addEventListener('click',()=>openPhotos(data[+el.dataset.photo])));document.querySelectorAll('.pub').forEach(el=>{el.addEventListener('click',e=>{if(e.target.closest('a,.photosbtn'))return;locate(data[+el.dataset.i])});el.addEventListener('keydown',e=>{if(e.key==='Enter')locate(data[+el.dataset.i])})})}
+async function locate(p){if(!map)return;const key='pfgeo:'+p.name+'|'+p.address;let loc;try{loc=JSON.parse(localStorage.getItem(key)||'null')}catch(e){}$('mapnote').textContent='Finding '+p.name+' on OpenStreetMap…';if(!loc){try{const q=[p.name,p.address,(/Oxford|Manchester|Bristol|London/i.test(p.address)?'':(AREAS.includes(p.area)?'London':p.area))].filter(Boolean).join(', ');const u='https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(q);const res=await fetch(u);if(!res.ok)throw Error('lookup failed');const json=await res.json();if(json.length){loc=[+json[0].lat,+json[0].lon];localStorage.setItem(key,JSON.stringify(loc))}}catch(e){}}if(loc){if(marker)map.removeLayer(marker);marker=L.marker(loc).addTo(map).bindPopup(`<b>${escapeHtml(p.name)}</b><br>${escapeHtml(p.address)}<br>${p.price!=null?'£'+p.price.toFixed(2):'Price unverified'}`).openPopup();map.setView(loc,16);$('mapnote').textContent=p.name+' · pin located via OpenStreetMap search'}else{$('mapnote').textContent='Exact location not found automatically. Use “Open in OSM” on the pub card.'}}
+
+// Pins are resolved on demand and cached locally. OSM Nominatim is not a bulk
+// geocoding service, so we show cached pins first and limit new lookups.
+function geokey(p){return 'pfgeo:'+p.name+'|'+p.address}
+function cachedGeo(p){try{const v=JSON.parse(localStorage.getItem(geokey(p))||'null');return Array.isArray(v)&&v.length===2?v:null}catch(e){return null}}
+function addPin(p,loc){if(!map||!pinLayer||!loc)return;L.marker(loc).addTo(pinLayer).bindPopup(`<b>${escapeHtml(p.name)}</b><br>${escapeHtml(p.address||p.area)}<br>${p.price!=null?'£'+p.price.toFixed(2):'Price unverified'}`)}
+function uniquePubs(){return [...new Map(records.map(p=>[(p.name+'|'+p.address).toLowerCase(),p])).values()]}
+function showAllPins(){if(!map)return;pinLayer.clearLayers();const pubs=uniquePubs();pinQueue=[];let placed=0;for(const p of pubs){const loc=cachedGeo(p);if(loc){addPin(p,loc);placed++}else pinQueue.push(p)}$('clearpins').classList.remove('hidden');$('morepins').classList.toggle('hidden',!pinQueue.length);$('mapnote').textContent=`${placed} of ${pubs.length} pubs pinned. ${pinQueue.length} need location lookups; tap Load more pins to resolve the next batch.`;if(placed){const b=pinLayer.getBounds();if(b.isValid())map.fitBounds(b.pad(.15),{maxZoom:14})}else map.setView([51.5074,-.1278],11)}
+async function loadMorePins(){if(pinBusy||!pinQueue.length)return;pinBusy=true;$('morepins').disabled=true;const n=Math.min(10,pinQueue.length);let added=0;for(let i=0;i<n;i++){const p=pinQueue.shift();try{const q=[p.name,p.address,p.area].filter(Boolean).join(', ');const res=await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(q));if(res.ok){const j=await res.json();if(j.length){const loc=[+j[0].lat,+j[0].lon];localStorage.setItem(geokey(p),JSON.stringify(loc));addPin(p,loc);added++}}}catch(e){}$('mapnote').textContent=`Finding pins… ${i+1}/${n} checked, ${pinQueue.length} remaining`;await new Promise(resolve=>setTimeout(resolve,1200))}pinBusy=false;$('morepins').disabled=false;$('morepins').classList.toggle('hidden',!pinQueue.length);$('mapnote').textContent=`Added ${added} pins this batch. ${pinQueue.length} pubs still need a location lookup. Pins are saved in this browser.`;const b=pinLayer.getBounds();if(b.isValid())map.fitBounds(b.pad(.15),{maxZoom:14})}
+function clearPins(){pinQueue=[];pinLayer?.clearLayers();$('morepins').classList.add('hidden');$('clearpins').classList.add('hidden');$('mapnote').textContent='Select a pub to locate it, or show all cached pub pins.'}
+function setTab(tab){const suggest=tab==='suggest';$('finder').classList.toggle('hidden',suggest);$('suggestions').classList.toggle('hidden',!suggest);$('tabfinder').classList.toggle('active',!suggest);$('tabsuggest').classList.toggle('active',suggest);if(!suggest)setTimeout(()=>map?.invalidateSize(),50)}
+$('tabfinder').addEventListener('click',()=>setTab('finder'));
+$('tabsuggest').addEventListener('click',()=>setTab('suggest'));
+$('allpins').addEventListener('click',showAllPins);
+$('morepins').addEventListener('click',loadMorePins);
+$('clearpins').addEventListener('click',clearPins);
+$('suggestform').addEventListener('submit',e=>{e.preventDefault();const name=$('suggestname').value.trim(),city=$('suggestcity').value.trim(),details=$('suggestdetails').value.trim();if(!name||!city)return;const suggestion=name+', '+city+(details?' — '+details:'');if(SUGGEST_ENDPOINT){sendPost({action:'suggest',suggestion});$('suggeststatus').textContent='Suggestion submitted for review. Check the Suggestions sheet to confirm it arrived.';$('suggestform').reset()}else{$('suggeststatus').innerHTML='Website submissions need a one-time Google Apps Script connection. For now, <a href="'+$('sheetSuggestLink').href+'" target="_blank" rel="noopener">open the Suggestions sheet</a> and paste this into the next empty cell in column A: <strong>'+escapeHtml(suggestion)+'</strong>';navigator.clipboard?.writeText(suggestion).catch(()=>{})}});
+
+
+// Read only APPROVED photos from the shared Photos tab. No browser credentials required.
+async function refreshPhotos(){
+ try{const rows=await fetchTab('Photos');photos=rows.slice(1).filter(r=>r[0]&&String(r[6]||'').toUpperCase()==='APPROVED').map(r=>({pub:r[0],area:r[1]||'',date:r[2]||'',url:r[3]||'',caption:r[4]||'',by:r[5]||''})).filter(x=>/^https:\/\//.test(x.url));}catch(e){photos=[]}
+ if(!$('photos').classList.contains('hidden'))renderPhotos();
+}
+function fillPhotoPubs(){const previous=$('photopub').value;const pubs=uniquePubs().sort((a,b)=>a.name.localeCompare(b.name));$('photopub').innerHTML='<option value="">Choose a pub</option>'+pubs.map(p=>'<option value="'+escapeHtml(p.name+'|'+p.area)+'">'+escapeHtml(p.name+' — '+p.area)+'</option>').join('');if([...$('photopub').options].some(o=>o.value===previous))$('photopub').value=previous}
+function switchTab(name){for(const [id,tab] of [['finder','tabfinder'],['suggestions','tabsuggest'],['photos','tabphotos']]){$(id).classList.toggle('hidden',id!==name);$(tab).classList.toggle('active',id===name)}if(name==='finder'&&map)setTimeout(()=>map.invalidateSize(),50);if(name==='photos'){fillPhotoPubs();renderPhotos()}}
+function openPhotos(p){switchTab('photos');$('photopub').value=p.name+'|'+p.area;renderPhotos();window.scrollTo({top:0,behavior:'smooth'})}
+function renderPhotos(){const val=$('photopub').value;const list=val?photos.filter(p=>(p.pub+'|'+p.area).toLowerCase()===val.toLowerCase()):[];$('photostatus').textContent=!val?'Select a pub to see photos.':list.length?list.length+' approved photo(s)':'No approved photos yet — be the first to submit one.';$('photogrid').innerHTML=list.map(p=>'<div class="photocard"><a href="'+escapeHtml(p.url)+'" target="_blank" rel="noopener noreferrer"><img loading="lazy" referrerpolicy="no-referrer" src="'+escapeHtml(p.url)+'" alt="Photo from '+escapeHtml(p.pub)+'"></a><div class="details">'+escapeHtml(p.caption||'Pub photo')+'<div>🕒 '+escapeHtml(p.date)+'</div><div>'+escapeHtml(p.by?'By '+p.by:'Anonymous')+'</div></div></div>').join('')}
+function sendPost(fields){const form=document.createElement('form');form.method='POST';form.action=SUGGEST_ENDPOINT;form.target='suggestSink';for(const [name,value] of Object.entries(fields)){const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.appendChild(input)}let frame=$('suggestSink');if(!frame){frame=document.createElement('iframe');frame.name='suggestSink';frame.id='suggestSink';frame.style.display='none';document.body.appendChild(frame)}document.body.appendChild(form);form.submit();form.remove()}
+$('tabfinder').onclick=()=>switchTab('finder');$('tabsuggest').onclick=()=>switchTab('suggestions');$('tabphotos').onclick=()=>switchTab('photos');$('backfinder').onclick=()=>switchTab('finder');$('photopub').onchange=renderPhotos;
+// Compress large camera photos locally; Apps Script still receives <2 MB JPEG.
+async function compressPubPhoto(file){
+ if(file.size>100*1024*1024)throw Error('Choose a photo under 100 MB.');
+ if(!['image/jpeg','image/png','image/webp'].includes(file.type))throw Error('Choose a JPG, PNG or WebP image.');
+ const image=await new Promise((resolve,reject)=>{
+  const url=URL.createObjectURL(file),img=new Image();
+  img.onload=()=>{URL.revokeObjectURL(url);resolve(img)};
+  img.onerror=()=>{URL.revokeObjectURL(url);reject(Error('Cannot open this image. Try a JPG.'))};
+  img.src=url;
+ });
+ const maxSide=1600,scale=Math.min(1,maxSide/Math.max(image.naturalWidth,image.naturalHeight));
+ const canvas=document.createElement('canvas');
+ canvas.width=Math.max(1,Math.round(image.naturalWidth*scale));
+ canvas.height=Math.max(1,Math.round(image.naturalHeight*scale));
+ const ctx=canvas.getContext('2d');
+ if(!ctx)throw Error('Image processing is unavailable on this phone.');
+ ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);
+ ctx.drawImage(image,0,0,canvas.width,canvas.height);
+ let blob;
+ for(const quality of [.82,.72,.60,.48]){
+  blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',quality));
+  if(!blob)throw Error('Could not compress this photo.');
+  if(blob.size<=1.5*1024*1024)break;
+ }
+ if(blob.size>1.9*1024*1024)throw Error('Image is still too large after compression. Try a smaller photo.');
+ return await new Promise((resolve,reject)=>{
+  const reader=new FileReader();
+  reader.onload=()=>resolve(String(reader.result).split(',')[1]);
+  reader.onerror=()=>reject(Error('Could not read the compressed photo.'));
+  reader.readAsDataURL(blob);
+ });
+}
+$('photoform').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const pub=$('photopub').value,file=$('photofile').files[0],status=$('photouploadstatus');
+ if(!pub){status.textContent='Choose a pub first.';return}
+ if(!file){status.textContent='Choose a photo first.';return}
+ if(!SUGGEST_ENDPOINT){status.textContent='Photo uploads are not connected yet.';return}
+ const button=$('photoupload');
+ button.disabled=true;status.textContent='Compressing photo on your phone…';
+ try{
+  const data=await compressPubPhoto(file);
+  const [name,area]=pub.split('|');
+  status.textContent='Sending compressed photo…';
+  sendPost({action:'photo',pub:name,area,mime:'image/jpeg',base64:data,filename:'huzz-photo.jpg',by:$('photoname').value.trim(),caption:$('photocaption').value.trim()});
+  status.textContent='Photo sent. Waiting for it to appear in the gallery…';
+  const submittedPub=pub;
+  // The hidden-form POST cannot report completion. Poll the public Photos sheet.
+  (async()=>{for(let attempt=0;attempt<10;attempt++){await new Promise(r=>setTimeout(r,3000));await refreshPhotos();const [n,a]=submittedPub.split('|');if(photos.some(x=>x.pub.toLowerCase()===n.toLowerCase()&&x.area.toLowerCase()===a.toLowerCase())){status.textContent='Gallery refreshed. Your photo may now be visible below.';renderPhotos();return}}status.textContent='Upload sent, but not confirmed. Refresh the page and check the Photos sheet.';})();
+  $('photoform').reset();
+ }catch(err){status.textContent=err.message||'Photo upload failed. Try another photo.'}
+ finally{button.disabled=false}
+});
+
+['area','day','sort','search','verified'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));$('refresh').addEventListener('click',async()=>{await loadSheet();fillPhotoPubs();await refreshPhotos()});setupMap();render();loadSheet().then(()=>{fillPhotoPubs();refreshPhotos();});
+</script></body></html>
